@@ -7,7 +7,7 @@
 #include <sstream>
 #include "parameters.hpp"
 #include "archlab.hpp"
-
+#include"omp.h"
 
 namespace Tests {
 
@@ -301,7 +301,17 @@ int main(int argc, char **argv) {
 		}
 	}
 	::testing::InitGoogleTest(&argc, argv);
+
+	std::vector<int> omp_threads_values;
+	std::vector<int> default_omp_threads_values;
+	default_omp_threads_values.push_back(1);
+	archlab_add_multi_option<std::vector<int> >("threads",
+					      omp_threads_values,
+					      default_omp_threads_values,
+					      "1",
+					      "How many threads use.  Pass multiple values to run with multiple thread counts.");
 	
+
 	int s = 0;
 	std::vector<int> param1_values;
 	std::vector<int> default_param1_values;
@@ -361,31 +371,37 @@ int main(int argc, char **argv) {
 
 	archlab_parse_cmd_line(&argc, argv);
 
-	for(auto & param1_value : param1_values ) {
-		g_param1_value = param1_value;
-		theDataCollector->register_tag(param1_name, g_param1_value);
-		std::cout << "Setting param1_value (" << param1_name << ") = " << g_param1_value <<"\n";
-		for(auto & param2_value : param2_values ) {
-			g_param2_value = param2_value;
-			theDataCollector->register_tag(param2_name, g_param2_value);
-			std::cout << "Setting param2_value (" << param2_name << ") = " << g_param2_value <<"\n";
-			for(auto & param3_value : param3_values ) {
-				g_param3_value = param3_value;
-				theDataCollector->register_tag(param3_name, g_param3_value);
-				std::cout << "Setting param3_value (" << param3_name << ") = " << g_param3_value <<"\n";
-				for(auto & param4_value : param4_values ) {
-					g_param4_value = param4_value;
-					theDataCollector->register_tag(param4_name, g_param4_value);
-					std::cout << "Setting param4_value (" << param4_name << ") = " << g_param4_value <<"\n";
-					
-					int r  = RUN_ALL_TESTS();
-					if (r != 0) {
-						std::cout << "Tests failed for this set of parameters:\n";
-						std::cout << param1_name << " = " << g_param1_value << "\n";
-						std::cout << param2_name << " = " << g_param2_value << "\n";
-						std::cout << param3_name << " = " << g_param3_value << "\n";
-						std::cout << param4_name << " = " << g_param4_value << "\n";
-						return r;
+	for(auto & thread_count: omp_threads_values ) {
+		theDataCollector->register_tag("omp_threads", thread_count);
+		g_thread_count = thread_count;
+		omp_set_num_threads(thread_count);
+		std::cout << "Setting threadcount to " << thread_count <<"\n";	for(auto & param1_value : param1_values ) {
+			g_param1_value = param1_value;
+			theDataCollector->register_tag(param1_name, g_param1_value);
+			std::cout << "Setting param1_value (" << param1_name << ") = " << g_param1_value <<"\n";
+			for(auto & param2_value : param2_values ) {
+				g_param2_value = param2_value;
+				theDataCollector->register_tag(param2_name, g_param2_value);
+				std::cout << "Setting param2_value (" << param2_name << ") = " << g_param2_value <<"\n";
+				for(auto & param3_value : param3_values ) {
+					g_param3_value = param3_value;
+					theDataCollector->register_tag(param3_name, g_param3_value);
+					std::cout << "Setting param3_value (" << param3_name << ") = " << g_param3_value <<"\n";
+					for(auto & param4_value : param4_values ) {
+						g_param4_value = param4_value;
+						theDataCollector->register_tag(param4_name, g_param4_value);
+						std::cout << "Setting param4_value (" << param4_name << ") = " << g_param4_value <<"\n";
+						
+						int r  = RUN_ALL_TESTS();
+						if (r != 0) {
+							std::cout << "Tests failed for this set of parameters:\n";
+							std::cout << param1_name << " = " << g_param1_value << "\n";
+							std::cout << param2_name << " = " << g_param2_value << "\n";
+							std::cout << param3_name << " = " << g_param3_value << "\n";
+							std::cout << param4_name << " = " << g_param4_value << "\n";
+							std::cout << "thread count" << " = " << thread_count << "\n";
+							return r;
+						}
 					}
 				}
 			}

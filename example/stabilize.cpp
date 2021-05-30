@@ -346,8 +346,9 @@ void do_stabilize_tile_y_1_omp_simple(const tensor_t<double> & images, tensor_t<
 				}
 			}
 		}
-	}
+       }
 }
+
 void do_stabilize_tile_y_1_omp_critical(const tensor_t<double> & images, tensor_t<double> & output, int TILE_SIZE)
 {
 	for (int this_frame = 1; this_frame < images.size.b; this_frame++) {
@@ -428,10 +429,54 @@ void do_stabilize_tile_y_1_omp_critical_fast(const tensor_t<double> & images, te
 	}
 }
 
+void do_stabilize_tile_y_1_omp_critical_fast_simd(const tensor_t<double> & images, tensor_t<double> & output, int TILE_SIZE)
+{
+	for (int this_frame = 1; this_frame < images.size.b; this_frame++) {
+		int previous_frame = this_frame - 1;
+		// same thing: need to protect 
+#pragma omp parallel for 
+		for(int pixel_yy = 0; pixel_yy < images.size.y; pixel_yy +=  TILE_SIZE) {
+			tensor_t<double>_output(output.size);
+			_output.clear();
+			for (int offset_x = 0; offset_x < MAX_OFFSET; offset_x++)  {
+				for (int offset_y = 0; offset_y < MAX_OFFSET; offset_y++)  {
+						
+					for(int pixel_y = pixel_yy; pixel_y < pixel_yy + TILE_SIZE && pixel_y < images.size.y; pixel_y++) {
+#pragma omp simd
+						for(int pixel_x = 0; pixel_x < images.size.x; pixel_x++) {
+								
+							int shifted_x = pixel_x + offset_x; 
+							int shifted_y = pixel_y + offset_y;
+								
+							if (shifted_x >= images.size.x ||
+							    shifted_y >= images.size.y)
+								continue;
+
+							double t = fabs(images(pixel_x, pixel_y, 0, this_frame) -
+									images(shifted_x, shifted_y, 0, previous_frame));
+							// accumulate the updates locally
+							_output(offset_x, offset_y, 0, this_frame) += t;
+						}
+					}
+				}
+			}
+#pragma omp critical // Apply them en masse this is reasonably fast because it's small, so the serialization isn't a big deal.
+			{
+				for (int offset_y = 0; offset_y < MAX_OFFSET; offset_y++)  {
+					for (int offset_x = 0; offset_x < MAX_OFFSET; offset_x++)  {
+						output(offset_x, offset_y, 0, this_frame) += _output(offset_x, offset_y, 0, this_frame);
+					}
+				}
+				
+			}
+		}
+	}
+}
+
 
 
  
-void stabilize(const std::string & version, const dataset_t & test, int frames, int tile_size)
+void stabilize(const std::string & version, const dataset_t & test, int frames, int tile_size, int thread_count)
 {
 
         // Declare a 4D tensor to hold frames video frames
@@ -481,6 +526,7 @@ void stabilize(const std::string & version, const dataset_t & test, int frames, 
 			IMPL(tile_y_1_omp_simple),
 			IMPL(tile_y_1_omp_critical),
 			IMPL(tile_y_1_omp_critical_fast),
+			IMPL(tile_y_1_omp_critical_fast_simd),
 			IMPL(iteration_space),
 			IMPL(offset_inside),
 			IMPL(offset_outside)
@@ -496,7 +542,7 @@ void stabilize(const std::string & version, const dataset_t & test, int frames, 
 		if (version == i.first || version == "all") {
 			std::cerr << "Running " << i.first << "\n";
 			std::stringstream name;
-			name << i.first << "_" << tile_size;
+			name << i.first << "_B" << tile_size << "_T" << thread_count;
 			{
 				output.clear();
 				ArchLabTimer timer;

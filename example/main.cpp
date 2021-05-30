@@ -7,9 +7,10 @@
 #include "CNN/canela.hpp"
 #include "math.h"
 #include <omp.h>
+
 using namespace std;
 
-void stabilize(const std::string & version, const dataset_t & dataset, int frames, int tile_size);
+void stabilize(const std::string & version, const dataset_t & dataset, int frames, int tile_size, int thread_count);
 
 int main(int argc, char *argv[])
 {
@@ -81,7 +82,7 @@ int main(int argc, char *argv[])
 					omp_set_num_threads(thread_count);
 					
 					std::cout << "Setting threadcount to " << thread_count <<"\n";
-					stabilize(impl, *test, frames, tile_size);
+					stabilize(impl, *test, frames, tile_size, thread_count);
 					
 				}
 			}

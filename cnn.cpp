@@ -11,6 +11,8 @@
 #include "reps.hpp"
 #include"canary.hpp"
 #include"omp.h"
+#include <cstdlib>
+
 using namespace std;
 
 int main(int argc, char *argv[])
@@ -48,12 +50,21 @@ int main(int argc, char *argv[])
 					      "Which clock rate to run.  Possibilities on this machine are: " + clocks.str());
 	std::vector<int> omp_threads_values;
 	std::vector<int> default_omp_threads_values;
-	default_omp_threads_values.push_back(1);
+	char *ont = getenv("OMP_NUM_THREADS");
+	if (!ont) {
+		ont = strdup("1");
+	}
+	int default_thread_count;
+	
+	std::stringstream s(ont);
+	s >> default_thread_count;
+
+	default_omp_threads_values.push_back(default_thread_count);
 	archlab_add_multi_option<std::vector<int> >("threads",
-					      omp_threads_values,
-					      default_omp_threads_values,
-					      "1",
-					      "How many threads use.  Pass multiple values to run with multiple thread counts.");
+						    omp_threads_values,
+						    default_omp_threads_values,
+						    ont,
+						    "How many threads use.  Pass multiple values to run with multiple thread counts.  The default is set by OMP_NUM_THREADS, if it is set.  Otherwise, it's 1.");
 	
 	std::vector<std::string> dataset_s;
 	std::vector<std::string> default_set;
@@ -221,6 +232,7 @@ int main(int argc, char *argv[])
 		for(auto & thread_count: omp_threads_values ) {
 			theDataCollector->register_tag("omp_threads", thread_count);
 			omp_set_num_threads(thread_count);
+			g_thread_count = thread_count;
 			std::cout << "Setting threadcount to " << thread_count <<"\n";
 			for(auto & param1_value : param1_values ) {
 				g_param1_value = param1_value;
