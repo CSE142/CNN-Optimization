@@ -284,7 +284,7 @@ public:
 
 #define CONV_CALC_GRADS_Z 4
 
-		for (int zz = 0; zz < in.size.b; zz += CONV_CALC_GRADS_Z)
+		for (int zz = 0; zz < in.size.z; zz += CONV_CALC_GRADS_Z)
 		{
 			for (int b = 0; b < in.size.b; b++)
 			{
