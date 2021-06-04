@@ -462,6 +462,7 @@ public:
 
 	void calc_grads(const tensor_t<double> &grad_next_layer)
 	{
+		omp_set_num_threads(FC_ACTIVATE_THREAD_COUNT);
 		switch (CONV_CALC_GRADS_IMPLEMENTATION)
 		{
 		case 0:
@@ -528,6 +529,7 @@ public:
 
 	void activate(tensor_t<double> &in)
 	{
+		omp_set_num_threads(FC_ACTIVATE_THREAD_COUNT);
 		switch (CONV_ACTIVATE_IMPLEMENTATION)
 		{
 		case 0:
