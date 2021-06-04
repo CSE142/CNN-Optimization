@@ -25,10 +25,9 @@ public:
 	{
 	}
 
-//#define FC_ACTIVATE_IMPLEMENTATION g_param1_value
 #define FC_ACTIVATE_IMPLEMENTATION 1
 #define FC_CALC_GRADS_IMPLEMENTATION 1
-	// #define FC_ACTIVATE_THREAD_COUNT g_thread_count
+#define FC_ACTIVATE_THREAD_COUNT g_thread_count
 
 	void activate(tensor_t<double> &in)
 	{
@@ -36,7 +35,7 @@ public:
 		std::stringstream ss;
 
 		ss << g_function_name << "_I" << FC_ACTIVATE_IMPLEMENTATION << "_" << g_param2_value << "_" << g_param3_value << "_" << g_param4_value;
-		// omp_set_num_threads(FC_ACTIVATE_THREAD_COUNT);
+		omp_set_num_threads(FC_ACTIVATE_THREAD_COUNT);
 		NEW_TRACE(ss.str().c_str());
 		START_TRACE();
 		DUMP_TENSOR_START("weights", weights);
@@ -101,6 +100,7 @@ public:
 #define FC_ACTIVATE_B 4
 #define FC_ACTIVATE_N 4
 
+#pragma omp parallel for
 		for (int bb = 0; bb < in.size.y; bb += FC_ACTIVATE_B)
 		{
 			for (int nn = 0; nn < out.size.x; nn += FC_ACTIVATE_N)
@@ -138,6 +138,14 @@ public:
 
 	void calc_grads(const tensor_t<double> &grad_next_layer)
 	{
+		std::stringstream ss;
+
+		ss << g_function_name << "_I" << FC_CALC_GRADS_IMPLEMENTATION;
+		omp_set_num_threads(FC_ACTIVATE_THREAD_COUNT);
+		NEW_TRACE(ss.str().c_str());
+		START_TRACE();
+		DUMP_TENSOR_START("grads_out", grads_out);
+		DUMP_TENSOR_START("weights", weights);
 		switch (FC_CALC_GRADS_IMPLEMENTATION)
 		{
 		case 0:
@@ -147,12 +155,24 @@ public:
 			calc_grads_1(grad_next_layer);
 			break;
 		case 2:
-			calc_grads_thread_baseline(grad_next_layer);
+			calc_grads_thread_baseline_nn(grad_next_layer);
+			break;
+		case 3:
+			calc_grads_thread_baseline_b(grad_next_layer);
+			break;
+		case 4:
+			calc_grads_thread_baseline_n(grad_next_layer);
+			break;
+		case 5:
+			calc_grads_thread_baseline_i(grad_next_layer);
 			break;
 		default:
 			fc_layer_t::calc_grads(grad_next_layer);
 			break;
 		}
+		DUMP_STOP("grads_out");
+		DUMP_STOP("weights");
+		STOP_TRACE();
 	}
 
 	// This is as a starting point for your work on this lab.
@@ -179,8 +199,11 @@ public:
 #define FC_CALC_GRADS_N 4
 
 		// Reorder loops and tile on n
+#pragma omp parallel for
 		for (int bb = 0; bb < out.size.b; bb += FC_CALC_GRADS_B)
 		{
+			tensor_t<double> _grads_out(grads_out.size);
+			_grads_out.clear();
 			for (int nn = 0; nn < out.size.x; nn += FC_CALC_GRADS_N)
 			{
 				for (int ii = 0; ii < grads_out.size.x; ii += FC_CALC_GRADS_I)
@@ -192,9 +215,20 @@ public:
 							double act_grad_nb = act_grad(n, 0, 0, b);
 							for (int i = ii; i < ii + FC_CALC_GRADS_I && i < grads_out.size.x; i++)
 							{
-								grads_out(i, 0, 0, b) += act_grad_nb * weights(i, n, 0);
+								_grads_out(i, 0, 0, b) += act_grad_nb * weights(i, n, 0);
 							}
 						}
+					}
+				}
+			}
+
+#pragma omp critical
+			{
+				for (int b = 0; b < out.size.b; b++)
+				{
+					for (int i = 0; i < grads_out.size.x; i++)
+					{
+						grads_out(i, 0, 0, b) += _grads_out(i, 0, 0, b);
 					}
 				}
 			}
@@ -224,17 +258,188 @@ public:
 		}
 
 		// Reorder loops and  tile on n
-		// #progma omp parallel for
 		for (int nn = 0; nn < out.size.x; nn += BLOCK_SIZE)
 		{
 			for (int b = 0; b < out.size.b; b++)
 			{
 				for (int n = nn; n < nn + BLOCK_SIZE && n < out.size.x; n++)
 				{
-					double act_grad_nb = act_grad(n, 0, 0, b);
 					for (int i = 0; i < grads_out.size.x; i++)
 					{
-						grads_out(i, 0, 0, b) += act_grad_nb * weights(i, n, 0);
+						grads_out(i, 0, 0, b) += act_grad(n, 0, 0, b) * weights(i, n, 0);
+					}
+				}
+			}
+		}
+		grads_out.size = in.size;
+	}
+
+	void calc_grads_thread_baseline_nn(const tensor_t<double> &grad_next_layer)
+	{
+
+		memset(grads_out.data, 0, grads_out.size.x * grads_out.size.y * grads_out.size.z * sizeof(double));
+
+		grads_out.size.x = grads_out.size.x * grads_out.size.y * grads_out.size.z;
+		grads_out.size.y = 1;
+		grads_out.size.z = 1;
+
+		for (int b = 0; b < out.size.b; b++)
+		{
+			for (int n = 0; n < activator_input.size.x; n++)
+			{
+				double ad = activator_derivative(activator_input(n, 0, 0, b));
+				double ng = grad_next_layer(n, 0, 0, b);
+				act_grad(n, 0, 0, b) = ad * ng;
+			}
+		}
+
+		// Reorder loops and  tile on n
+#pragma omp parallel for
+		for (int nn = 0; nn < out.size.x; nn += BLOCK_SIZE)
+		{
+			tensor_t<double> _grads_out(grads_out.size);
+			_grads_out.clear();
+			for (int b = 0; b < out.size.b; b++)
+			{
+				for (int n = nn; n < nn + BLOCK_SIZE && n < out.size.x; n++)
+				{
+					for (int i = 0; i < grads_out.size.x; i++)
+					{
+						_grads_out(i, 0, 0, b) += act_grad(n, 0, 0, b) * weights(i, n, 0);
+					}
+				}
+			}
+
+#pragma omp critical
+			{
+				for (int b = 0; b < out.size.b; b++)
+				{
+					for (int i = 0; i < grads_out.size.x; i++)
+					{
+						grads_out(i, 0, 0, b) += _grads_out(i, 0, 0, b);
+					}
+				}
+			}
+		}
+		grads_out.size = in.size;
+	}
+
+	void calc_grads_thread_baseline_b(const tensor_t<double> &grad_next_layer)
+	{
+
+		memset(grads_out.data, 0, grads_out.size.x * grads_out.size.y * grads_out.size.z * sizeof(double));
+
+		grads_out.size.x = grads_out.size.x * grads_out.size.y * grads_out.size.z;
+		grads_out.size.y = 1;
+		grads_out.size.z = 1;
+
+		for (int b = 0; b < out.size.b; b++)
+		{
+			for (int n = 0; n < activator_input.size.x; n++)
+			{
+				double ad = activator_derivative(activator_input(n, 0, 0, b));
+				double ng = grad_next_layer(n, 0, 0, b);
+				act_grad(n, 0, 0, b) = ad * ng;
+			}
+		}
+
+		// Reorder loops and  tile on n
+		for (int nn = 0; nn < out.size.x; nn += BLOCK_SIZE)
+		{
+
+#pragma omp parallel for
+			for (int b = 0; b < out.size.b; b++)
+			{
+				for (int n = nn; n < nn + BLOCK_SIZE && n < out.size.x; n++)
+				{
+					for (int i = 0; i < grads_out.size.x; i++)
+					{
+						grads_out(i, 0, 0, b) += act_grad(n, 0, 0, b) * weights(i, n, 0);
+					}
+				}
+			}
+		}
+		grads_out.size = in.size;
+	}
+
+	void calc_grads_thread_baseline_n(const tensor_t<double> &grad_next_layer)
+	{
+
+		memset(grads_out.data, 0, grads_out.size.x * grads_out.size.y * grads_out.size.z * sizeof(double));
+
+		grads_out.size.x = grads_out.size.x * grads_out.size.y * grads_out.size.z;
+		grads_out.size.y = 1;
+		grads_out.size.z = 1;
+
+		for (int b = 0; b < out.size.b; b++)
+		{
+			for (int n = 0; n < activator_input.size.x; n++)
+			{
+				double ad = activator_derivative(activator_input(n, 0, 0, b));
+				double ng = grad_next_layer(n, 0, 0, b);
+				act_grad(n, 0, 0, b) = ad * ng;
+			}
+		}
+
+		// Reorder loops and  tile on n
+		for (int nn = 0; nn < out.size.x; nn += BLOCK_SIZE)
+		{
+			for (int b = 0; b < out.size.b; b++)
+			{
+				int minn = std::min(nn + BLOCK_SIZE, out.size.x);
+#pragma omp parallel for
+				for (int n = nn; n < minn; n++)
+				{
+					tensor_t<double> _grads_out(grads_out.size);
+					_grads_out.clear();
+					for (int i = 0; i < grads_out.size.x; i++)
+					{
+						_grads_out(i, 0, 0, b) += act_grad(n, 0, 0, b) * weights(i, n, 0);
+					}
+
+#pragma omp critical
+					{
+						for (int i = 0; i < grads_out.size.x; i++)
+						{
+							grads_out(i, 0, 0, b) += _grads_out(i, 0, 0, b);
+						}
+					}
+				}
+			}
+		}
+		grads_out.size = in.size;
+	}
+
+	void calc_grads_thread_baseline_i(const tensor_t<double> &grad_next_layer)
+	{
+
+		memset(grads_out.data, 0, grads_out.size.x * grads_out.size.y * grads_out.size.z * sizeof(double));
+
+		grads_out.size.x = grads_out.size.x * grads_out.size.y * grads_out.size.z;
+		grads_out.size.y = 1;
+		grads_out.size.z = 1;
+
+		for (int b = 0; b < out.size.b; b++)
+		{
+			for (int n = 0; n < activator_input.size.x; n++)
+			{
+				double ad = activator_derivative(activator_input(n, 0, 0, b));
+				double ng = grad_next_layer(n, 0, 0, b);
+				act_grad(n, 0, 0, b) = ad * ng;
+			}
+		}
+
+		// Reorder loops and  tile on n
+		for (int nn = 0; nn < out.size.x; nn += BLOCK_SIZE)
+		{
+			for (int b = 0; b < out.size.b; b++)
+			{
+				for (int n = nn; n < nn + BLOCK_SIZE && n < out.size.x; n++)
+				{
+#pragma omp parallel for
+					for (int i = 0; i < grads_out.size.x; i++)
+					{
+						grads_out(i, 0, 0, b) += act_grad(n, 0, 0, b) * weights(i, n, 0);
 					}
 				}
 			}
@@ -283,7 +488,7 @@ public:
 							filter_grads[k].get(i, j, z, b).grad = 0;
 
 #define CONV_CALC_GRADS_Z 4
-
+#pragma omp parallel for
 		for (int zz = 0; zz < in.size.z; zz += CONV_CALC_GRADS_Z)
 		{
 			for (int b = 0; b < in.size.b; b++)
@@ -342,8 +547,11 @@ public:
 	void __attribute__((noinline)) activate_1(tensor_t<double> &in)
 	{
 		copy_input(in);
+#pragma omp parallel for
 		for (int zz = 0; zz < in.size.z; zz += CONV_ACTIVATE_Z)
 		{
+			tensor_t<double> _out(out.size);
+			_out.clear();
 			for (int b = 0; b < out.size.b; b++)
 			{
 				for (uint filter = 0; filter < filters.size(); filter++)
@@ -356,7 +564,7 @@ public:
 							point_t mapped(x * stride, y * stride, 0);
 
 							if (zz == 0)
-								out(x, y, filter, b) = 0;
+								_out(x, y, filter, b) = 0;
 							double sum = 0;
 							for (int z = zz; z < zz + CONV_ACTIVATE_Z && z < in.size.z; z++)
 								for (int j = 0; j < kernel_size; j++)
@@ -376,7 +584,24 @@ public:
 										}
 										sum += f * v;
 									}
-							out(x, y, filter, b) += sum;
+							_out(x, y, filter, b) += sum;
+						}
+					}
+				}
+			}
+
+#pragma omp critical
+			{
+				for (int b = 0; b < out.size.b; b++)
+				{
+					for (uint filter = 0; filter < filters.size(); filter++)
+					{
+						for (int y = 0; y < out.size.y; y++)
+						{
+							for (int x = 0; x < out.size.x; x++)
+							{
+								out(x, y, filter, b) += _out(x, y, filter, b);
+							}
 						}
 					}
 				}
